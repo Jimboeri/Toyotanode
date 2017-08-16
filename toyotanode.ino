@@ -32,6 +32,7 @@
 #define TOYOTA_DEVICE 121
 #define GARAGE_DEVICE 32
 #define GARAGE_NODE   4
+#define MOTEINO_DEVICE 1
 
 #define LED           9 // Moteinos have LEDs on D9
 
@@ -54,7 +55,7 @@ char radio_encrypt[16];
 // ***********************************************************
 // EEPROM Parameter offsets
 #define RELAY_DELAY_OFFSET 20
-
+#define UPDATE_INTERVAL_OFFSET 30
 #define RADIO_NETWORK 101
 #define RADIO_NODE 102
 #define RADIO_GATEWAY 103
@@ -71,7 +72,7 @@ char radio_encrypt[16];
 // General settings
 //*******************************************************************************
 #define START_OFFSET 5000
-#define UPDATE_INTERVAL 15000
+#define INIT_UPDATE_INTERVAL 15000  // millisecs between general update messages
 
 //************************************************************
 // LED is device 3
@@ -110,6 +111,7 @@ int wiper_pot = 0;                // records the setting of the potentiometer
 float wiper_delay;                // time in sec between wipes
 int relay_delay;                  // stores msec that wiper relay should stay on
 unsigned long wiper_timer = 0L;   //used
+long update_interval = 0;
 
 //*************************************************************
 //***  SETUP Section
@@ -126,6 +128,7 @@ void setup() {
   EEPROM.put(RADIO_GATEWAY, GATEWAYID);          // temp to set up gateway
   EEPROM.put(RADIO_ENCRYPT, ENCRYPTKEY);         // temp to set up encryption key
   EEPROM.put(RELAY_DELAY_OFFSET, INIT_RELAY_DELAY);   // set up relay delay
+  EEPROM.put(UPDATE_INTERVAL_OFFSET, INIT_UPDATE_INTERVAL)
 #endif
   EEPROM.get(RADIO_NETWORK, radio_network);      // get network
   EEPROM.get(RADIO_NODE, radio_node);            // get node
@@ -170,6 +173,14 @@ void setup() {
     Serial.println("Correcting relay delay");
   }
 
+  EEPROM.get(UPDATE_INTERVAL_OFFSET, update_interval);   // set up update interval
+  if ((update_interval < 0) or (update_interval > 60000))
+  {
+    EEPROM.put(UPDATE_INTERVAL_OFFSET, INIT_UPDATE_INTERVAL);   // set up update interval
+    update_interval = INIT_UPDATE_INTERVAL;
+    Serial.println("Correcting interval update");
+  }
+
   //set up of pins
   pinMode(LED, OUTPUT);
   pinMode(SWITCH_PIN, INPUT);
@@ -206,16 +217,16 @@ void loop() {
     {
       first_msg = false;
       last_update = millis();
-      send_radio_msg(radio_gateway, 'I', millis() / 1000, 0.0, 0.0);
+      send_radio_msg(radio_gateway, 'I', MOTEINO_DEVICE, millis() / 1000, 0.0, 0.0, last_update);
       Serial.println("First radio message sent");
     }
   }
   if (!first_msg)
   {
-    if ((last_update + UPDATE_INTERVAL) < millis())
+    if ((last_update + update_interval) < millis())
     {
       last_update = millis();
-      send_radio_msg(radio_gateway, 'I', millis() / 1000, 0.0, 0.0);
+      send_radio_msg(radio_gateway, 'I', MOTEINO_DEVICE, millis() / 1000, 0.0, 0.0, last_update);
       //Serial.println("Running status update ");
     }
   }
@@ -233,7 +244,7 @@ void loop() {
       if (millis() - sw_last_off > LONG_SWITCH_TIME)    // this is a long press
       {
         Serial.println("Long press detected");
-        send_radio_msg1(GARAGE_NODE, GARAGE_DEVICE, 'A', 2, 0.0, 0); // commented out until ready to go lice
+        send_radio_msg(GARAGE_NODE, 'A', GARAGE_DEVICE, 2, 0.0, 0, millis()); // commented out until ready to go live
       }
       else if (millis() - sw_last_off > SHORT_SWITCH_TIME) // this is a short press - wiper control
       {
@@ -261,7 +272,7 @@ void loop() {
   {
 
     wiper_delay = (WIPER_MAX - WIPER_MIN) * (analogRead(WIPER_PIN) / 1024.0) + WIPER_MIN;
-    
+
     if (millis() > (wiper_timer + (wiper_delay * 1000)))
     {
       //Serial.println("Trigger wiper");
@@ -364,53 +375,53 @@ void process_radio()
 
   Serial.println();
   Serial.println("Data received");
-  receiveData1 = *(radioPayload*)radio.DATA;
-  printTheData(receiveData1);
-  requestID = receiveData1.req_ID;
+  receiveData2 = *(radioPayload2*)radio.DATA;
+  printTheData(receiveData2);
+  requestID = receiveData2.req_ID;
 
-  sendData1.nodeID = 1;    // always send to the gateway node
-  sendData1.instance = receiveData1.instance;
+  sendData2.nodeID = 1;    // always send to the gateway node
+  sendData2.instance = receiveData1.instance;
 
-  if (receiveData1.nodeID = radio_node)  // only if the message is for this node
+  if (receiveData2.nodeID = radio_node)  // only if the message is for this node
   {
-    switch (receiveData1.action) {
+    switch (receiveData2.action) {
       case 'P':   // parameter update
-        sendData1.req_ID = requestID;
-        sendData1.action = 'R';         // R is a response to a parameter update message
-        sendData1.result = 0;
-        if (receiveData1.deviceID == TOYOTA_DEVICE)  // DHT22
+        if (receiveData2.deviceID == TOYOTA_DEVICE)
         {
-          Serial.print("Parameter update request ");
-          Serial.print(receiveData1.float1);
+          Serial.print("Parameter update request (relay delay) for Toyota device ");
+          Serial.print(receiveData2.float1);
           Serial.println(" millisecs");
-          sendData1.deviceID = TOYOTA_DEVICE;
-          sendData1.float1 = receiveData1.float1;
-          sendData1.float2 = 0;
-          //sendData.result = 1;
-          relay_delay = receiveData1.float1;
+          relay_delay = receiveData2.float1;
           EEPROM.put(RELAY_DELAY_OFFSET, relay_delay);
-          radio.sendWithRetry(radio_gateway, (const void*)(&sendData1), sizeof(sendData1));
-          Serial.print("Relay delay changed to ");
-          Serial.print(relay_delay);
-          Serial.println(" milliseconds");
+          send_radio_msg(radio_gateway, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
+        }
+        else if (receiveData2.deviceID == MOTEINO_DEVICE)
+        {
+          Serial.print("Parameter update request (update interval) for Moteino device ");
+          Serial.print(receiveData2.float1);
+          Serial.println(" secs");
+          update_interval = receiveData2.float1 * 1000;
+          EEPROM.put(UPDATE_INTERVAL_OFFSET, update_interval);
+          send_radio_msg(radio_gateway, 'R', MOTEINO_DEVICE, update_interval/1000, 0.0, 0.0, requestID);
         }
         break;
 
       case 'Q':    // Parameter query
-        sendData1.req_ID = requestID;
-        sendData1.action = 'R';         // R is a response to a parameter update message
-        sendData1.result = 0;
-        if (receiveData1.deviceID == TOYOTA_DEVICE)  // Toyota
+        if (receiveData2.deviceID == TOYOTA_DEVICE)  // Toyota
         {
           Serial.println("Parameter request ");
-          sendData1.deviceID = TOYOTA_DEVICE;
-          sendData1.float1 = relay_delay;
-          sendData1.float2 = 0;
-          sendData1.result = 0;
-          radio.sendWithRetry(radio_gateway, (const void*)(&sendData1), sizeof(sendData1));
           Serial.print("Relay delay is ");
           Serial.print(relay_delay);
           Serial.println(" milliseconds");
+          send_radio_msg(radio_gateway, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
+        }
+        else if (receiveData2.deviceID == MOTEINO_DEVICE)
+        {
+          Serial.println("Parameter request ");
+          Serial.print("Update interval is ");
+          Serial.print(relay_delay);
+          Serial.println(" milliseconds");
+          send_radio_msg(radio_gateway, 'R', MOTEINO_DEVICE, update_interval/1000, 0.0, 0.0, requestID);
         }
         break;
 
@@ -420,7 +431,7 @@ void process_radio()
 
 
 // *************************************************************************************************
-void printTheData(radioPayload & myData)
+void printTheData(radioPayload2 & myData)
 {
   Serial.print("NodeID=");
   Serial.print(myData.nodeID);
@@ -442,12 +453,12 @@ void printTheData(radioPayload & myData)
 
 //*******************************************************************************************
 // Generic routine for sending a radio message
-void send_radio_msg(int gateway, char action, float param1, float param2, float result)
+void send_radio_msg(int gateway, char action, int device, float param1, float param2, float result, unsigned long requestID)
 
 {
-  sendData2.deviceID = TOYOTA_DEVICE; // TOYOTA code
+  sendData2.deviceID = device; // TOYOTA code
   sendData2.instance = 1;
-  sendData2.req_ID = millis();
+  sendData2.req_ID = requestID;
   sendData2.action = action;
   sendData2.result = result;
   sendData2.float1 = param1;
