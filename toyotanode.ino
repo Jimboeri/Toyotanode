@@ -71,8 +71,7 @@ char radio_encrypt[16];
 //*******************************************************************************
 // General settings
 //*******************************************************************************
-#define START_OFFSET 5000
-#define INIT_UPDATE_INTERVAL 15000  // millisecs between general update messages
+#define INIT_UPDATE_INTERVAL 5000  // millisecs between general update messages
 
 //************************************************************
 // LED is device 3
@@ -83,7 +82,7 @@ int ledStatus = 0;    // initially off
 // General declarations
 //**********************************
 unsigned long timepassed = 0L;
-unsigned long last_update = 0L;
+unsigned long last_update = 5000L;
 unsigned long nCnt = 0L;
 String inputString = "";         // a string to hold incoming data
 boolean stringComplete = false;  // whether the string is complete
@@ -163,7 +162,7 @@ void setup() {
   sprintf(buff, "\nTransmitting at %d Mhz...", FREQUENCY == RF69_433MHZ ? 433 : FREQUENCY == RF69_868MHZ ? 868 : 915);
   Serial.println(buff);
 
-  sendData1.nodeID = radio_node;    // This node id should be the same for all devices
+  sendData2.nodeID = radio_node;    // This node id should be the same for all devices
 
   EEPROM.get(RELAY_DELAY_OFFSET, relay_delay);   // set up relay delay
   if ((relay_delay < 0) or (relay_delay > 2000))
@@ -191,7 +190,6 @@ void setup() {
 // End of Setup
 //************************************************
 
-//void send_radio_msg(char action, float param1= 0.0, float param2 = 0.0, float result = 0);
 
 //*************************************************************
 // main loop
@@ -211,24 +209,12 @@ void loop() {
     process_radio();
   }
 
-  if ( millis() > START_OFFSET)
+  //Serial.println(update_interval);
+  if ((last_update + update_interval) < millis())
   {
-    if (first_msg)
-    {
-      first_msg = false;
-      last_update = millis();
-      send_radio_msg(radio_gateway, 'I', MOTEINO_DEVICE, millis() / 1000, 0.0, 0.0, last_update);
-      Serial.println("First radio message sent");
-    }
-  }
-  if (!first_msg)
-  {
-    if ((last_update + update_interval) < millis())
-    {
-      last_update = millis();
-      send_radio_msg(radio_gateway, 'I', MOTEINO_DEVICE, millis() / 1000, 0.0, 0.0, last_update);
-      //Serial.println("Running status update ");
-    }
+    last_update = millis();
+    send_radio_msg(radio_gateway, radio_node, 'I', MOTEINO_DEVICE, millis() / 1000, 0.0, 0.0, last_update);
+    Serial.println("Running status update ");
   }
 
   // switch detection section
@@ -244,7 +230,28 @@ void loop() {
       if (millis() - sw_last_off > LONG_SWITCH_TIME)    // this is a long press
       {
         Serial.println("Long press detected");
-        send_radio_msg(GARAGE_NODE, 'A', GARAGE_DEVICE, 2, 0.0, 0, millis()); // commented out until ready to go live
+        //send_radio_msg(GARAGE_NODE, radio_node, 'A', GARAGE_DEVICE, 2, 0.0, 0, millis()); // commented out until ready to go live
+
+        sendData2.nodeID = radio_node; // This node's ID
+        sendData2.deviceID = GARAGE_DEVICE; // TOYOTA code
+        sendData2.instance = 1;
+        sendData2.req_ID = millis();
+        sendData2.action = 'A';
+        sendData2.result = 0;
+        sendData2.float1 = 2;
+        sendData2.float2 = 0;
+        sendData2.float3 = 0;
+        sendData2.float4 = 0;
+
+        if (radio.sendWithRetry(GARAGE_NODE, (const void*)(&sendData2), sizeof(sendData2)))
+          Serial.println("OK");
+        else Serial.println(" nothing");
+
+        //radio.send(gateway, (const void*)(&sendData2), sizeof(sendData2));
+
+
+
+        Serial.println("Garage radio message sent");
       }
       else if (millis() - sw_last_off > SHORT_SWITCH_TIME) // this is a short press - wiper control
       {
@@ -281,8 +288,8 @@ void loop() {
       digitalWrite(WIPER_RELAY, HIGH);
       digitalWrite(LED, LOW);
       //Serial.println("Relay on");
-      Serial.print("Wiper delay = ");
-      Serial.println(wiper_delay);
+      //Serial.print("Wiper delay = ");
+      //Serial.println(wiper_delay);
       Serial.print("Wiper pot input = ");
       Serial.println(analogRead(WIPER_PIN));
     }
@@ -301,16 +308,6 @@ void loop() {
 
   }
 
-  if (sw_state == HIGH)
-  {
-    //digitalWrite(LED, HIGH);
-    //Serial.println("ON");
-  }
-  else
-  {
-    //digitalWrite(LED, LOW);
-    //Serial.println("OFF");
-  }
 }
 
 // *************************************************************************************************
@@ -393,7 +390,7 @@ void process_radio()
           Serial.println(" millisecs");
           relay_delay = receiveData2.float1;
           EEPROM.put(RELAY_DELAY_OFFSET, relay_delay);
-          send_radio_msg(radio_gateway, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
+          send_radio_msg(radio_gateway, radio_node, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
         }
         else if (receiveData2.deviceID == MOTEINO_DEVICE)
         {
@@ -402,7 +399,7 @@ void process_radio()
           Serial.println(" secs");
           update_interval = receiveData2.float1 * 1000;
           EEPROM.put(UPDATE_INTERVAL_OFFSET, update_interval);
-          send_radio_msg(radio_gateway, 'R', MOTEINO_DEVICE, update_interval/1000, 0.0, 0.0, requestID);
+          send_radio_msg(radio_gateway, radio_node, 'R', MOTEINO_DEVICE, update_interval / 1000, 0.0, 0.0, requestID);
         }
         break;
 
@@ -413,7 +410,7 @@ void process_radio()
           Serial.print("Relay delay is ");
           Serial.print(relay_delay);
           Serial.println(" milliseconds");
-          send_radio_msg(radio_gateway, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
+          send_radio_msg(radio_gateway, radio_node, 'R', TOYOTA_DEVICE, relay_delay, 0.0, 0.0, requestID);
         }
         else if (receiveData2.deviceID == MOTEINO_DEVICE)
         {
@@ -421,7 +418,7 @@ void process_radio()
           Serial.print("Update interval is ");
           Serial.print(relay_delay);
           Serial.println(" milliseconds");
-          send_radio_msg(radio_gateway, 'R', MOTEINO_DEVICE, update_interval/1000, 0.0, 0.0, requestID);
+          send_radio_msg(radio_gateway, radio_node, 'R', MOTEINO_DEVICE, update_interval / 1000, 0.0, 0.0, requestID);
         }
         break;
 
@@ -448,14 +445,19 @@ void printTheData(radioPayload2 & myData)
   Serial.print(", float1=");
   Serial.print(myData.float1);
   Serial.print(", float2=");
-  Serial.println(myData.float2);
+  Serial.print(myData.float2);
+  Serial.print(", float3=");
+  Serial.print(myData.float3);
+  Serial.print(", float4=");
+  Serial.println(myData.float4);
 }
 
 //*******************************************************************************************
 // Generic routine for sending a radio message
-void send_radio_msg(int gateway, char action, int device, float param1, float param2, float result, unsigned long requestID)
+void send_radio_msg(byte gateway, byte in_node, char action, int device, float param1, float param2, float result, unsigned long requestID)
 
 {
+  sendData2.nodeID = in_node; // This node's ID
   sendData2.deviceID = device; // TOYOTA code
   sendData2.instance = 1;
   sendData2.req_ID = requestID;
@@ -463,38 +465,15 @@ void send_radio_msg(int gateway, char action, int device, float param1, float pa
   sendData2.result = result;
   sendData2.float1 = param1;
   sendData2.float2 = param2;
-  //Serial.print(sendData2.float1);
-  //Serial.print(" seconds - ");
-  //if (radio.sendWithRetry(radio_gateway, (const void*)(&sendData2), sizeof(sendData2)))
-  //  Serial.println(" ok!");
-  //else Serial.println(" nothing");
+  sendData2.float3 = 0;
+  sendData2.float4 = 0;
 
-  radio.send(gateway, (const void*)(&sendData2), sizeof(sendData2));
+  if (radio.sendWithRetry(gateway, (const void*)(&sendData2), sizeof(sendData2)))
+    Serial.println("OK");
+  else Serial.println(" nothing");
 
-  //printTheData(sendData);
-
-}
-
-//*******************************************************************************************
-// Generic routine for sending a radio message
-void send_radio_msg1(int gateway, int device, char action, float param1, float param2, float result)
-
-{
-  sendData1.deviceID = device;
-  sendData1.instance = 1;
-  sendData1.req_ID = millis();
-  sendData1.action = action;
-  sendData1.result = result;
-  sendData1.float1 = param1;
-  sendData1.float2 = param2;
-  //Serial.print(sendData1.float1);
-  //Serial.print(" seconds - ");
-  //if (radio.sendWithRetry(radio_gateway, (const void*)(&sendData2), sizeof(sendData2)))
-  //  Serial.println(" ok!");
-  //else Serial.println(" nothing");
-
-  radio.send(gateway, (const void*)(&sendData1), sizeof(sendData1));
-
+  //radio.send(gateway, (const void*)(&sendData2), sizeof(sendData2));
+  //printTheData(sendData2);
 
 }
 
